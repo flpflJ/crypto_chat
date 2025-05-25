@@ -1,5 +1,5 @@
 FROM python:3.13-slim
-RUN pip install uvicorn fastapi
+RUN pip install uvicorn fastapi jose pydantic
 WORKDIR /app
 COPY main.py .
 EXPOSE 8000/tcp
