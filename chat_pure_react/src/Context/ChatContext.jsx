@@ -13,7 +13,6 @@ export const ChatProvider = ({ children }) => {
   const base64ToUint8 = (b64) => Uint8Array.from(atob(b64), c => c.charCodeAt(0));
   const uint8ToBase64 = (arr) => btoa(String.fromCharCode(...arr));
   const API_URL = import.meta.env.VITE_API_URL;
-  console.log(API_URL)
   useEffect(() => {
     if (!user?.username) return;
 
