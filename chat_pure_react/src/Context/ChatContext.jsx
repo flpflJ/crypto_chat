@@ -17,7 +17,7 @@ export const ChatProvider = ({ children }) => {
   useEffect(() => {
     if (!user?.username) return;
 
-    const ws = new WebSocket(`ws://localhost:8000/ws/${user.username}`);
+    const ws = new WebSocket(`ws://backend:8000/ws/${user.username}`);
     setSocket(ws);
 
     ws.onmessage = async (event) => {
@@ -93,7 +93,7 @@ export const ChatProvider = ({ children }) => {
     if (!withUser) return;
 
     try {
-      const res = await fetch(`http://localhost:8000/api/messages/${withUser}`, {
+      const res = await fetch(`http://backend:8000/api/messages/${withUser}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
 
@@ -182,7 +182,7 @@ export const ChatProvider = ({ children }) => {
     const key = [user.username, to].sort().join('-');
 
     try {
-      const res = await fetch("http://localhost:8000/api/public_keys", {
+      const res = await fetch("http://backend:8000/api/public_keys", {
         headers: { Authorization: `Bearer ${token}` }
       });
       const pubkeys = await res.json();

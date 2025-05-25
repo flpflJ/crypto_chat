@@ -25,7 +25,7 @@ export const AppProvider = ({children})=>{
 
 const fetchUsers = async (token) => {
   try {
-    const res = await fetch("http://localhost:8000/api/users", {
+    const res = await fetch("http://backend:8000/api/users", {
       headers: { Authorization: `Bearer ${token}` }
     });
     if (res.ok) {
@@ -57,7 +57,7 @@ const generateKeys = async () => {
 const onLogin = async (login, password) => {
   setLoading(true);
   try {
-    const res = await fetch("http://localhost:8000/api/token", {
+    const res = await fetch("http://backend:8000/api/token", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({ username: login, password })
@@ -71,7 +71,7 @@ const onLogin = async (login, password) => {
       await fetchUsers(data.access_token);
 
       const pubkey = await generateKeys();
-      await fetch("http://localhost:8000/api/pubkey", {
+      await fetch("http://backend:8000/api/pubkey", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -90,7 +90,7 @@ const onLogin = async (login, password) => {
 const onRegister = async (name, login, password) => {
   setLoading(true);
   try {
-    const res = await fetch("http://localhost:8000/api/register", {
+    const res = await fetch("http://backend:8000/api/register", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name, login, password })
