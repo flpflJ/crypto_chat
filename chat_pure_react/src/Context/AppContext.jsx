@@ -1,11 +1,11 @@
 import { createContext, useContext, useEffect, useState } from "react";
-const API_URL = import.meta.env.VITE_API_URL;
 export const AppContext = createContext()
 
 export const useAppContext = ()=>{
   return useContext(AppContext)
 } 
 export const AppProvider = ({children})=>{
+  const API_URL = import.meta.env.VITE_API_URL;
   const [user, setUser] = useState({})
   const [loading, setLoading] = useState(false)
   const [isAuth, setIsAuth] = useState(false)
@@ -24,7 +24,7 @@ export const AppProvider = ({children})=>{
 
 const fetchUsers = async (token) => {
   try {
-    const res = await fetch("http://${API_URL}/api/users", {
+    const res = await fetch(`http://${API_URL}/api/users`, {
       headers: { Authorization: `Bearer ${token}` }
     });
     if (res.ok) {
@@ -56,7 +56,7 @@ const generateKeys = async () => {
 const onLogin = async (login, password) => {
   setLoading(true);
   try {
-    const res = await fetch("http://${API_URL}/api/token", {
+    const res = await fetch(`http://${API_URL}/api/token`, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({ username: login, password })
@@ -70,7 +70,7 @@ const onLogin = async (login, password) => {
       await fetchUsers(data.access_token);
 
       const pubkey = await generateKeys();
-      await fetch("http://${API_URL}/api/pubkey", {
+      await fetch(`http://${API_URL}/api/pubkey`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -89,7 +89,7 @@ const onLogin = async (login, password) => {
 const onRegister = async (name, login, password) => {
   setLoading(true);
   try {
-    const res = await fetch("http://${API_URL}/api/register", {
+    const res = await fetch(`http://${API_URL}/api/register`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name, login, password })

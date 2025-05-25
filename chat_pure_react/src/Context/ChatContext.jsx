@@ -1,6 +1,5 @@
 import React, { createContext, useState, useContext, useEffect } from 'react';
 import { AppContext } from './AppContext';
-const API_URL = import.meta.env.VITE_API_URL;
 export const ChatContext = createContext();
 
 export const ChatProvider = ({ children }) => {
@@ -13,7 +12,8 @@ export const ChatProvider = ({ children }) => {
   // Вспомогательные функции для конвертации Base64 <-> Uint8Array
   const base64ToUint8 = (b64) => Uint8Array.from(atob(b64), c => c.charCodeAt(0));
   const uint8ToBase64 = (arr) => btoa(String.fromCharCode(...arr));
-
+  const API_URL = import.meta.env.VITE_API_URL;
+  console.log(API_URL)
   useEffect(() => {
     if (!user?.username) return;
 
@@ -182,7 +182,7 @@ export const ChatProvider = ({ children }) => {
     const key = [user.username, to].sort().join('-');
 
     try {
-      const res = await fetch("http://${API_URL}/api/public_keys", {
+      const res = await fetch(`http://${API_URL}/api/public_keys`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       const pubkeys = await res.json();
@@ -241,7 +241,7 @@ export const ChatProvider = ({ children }) => {
       socket?.send(JSON.stringify({ to, text: JSON.stringify(payload.for_recipient) }));
 
       // Сохранение сообщения на сервере (оба контейнера)
-      await fetch("http://${API_URL}/api/messages", {
+      await fetch(`http://${API_URL}/api/messages`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
