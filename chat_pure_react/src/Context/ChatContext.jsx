@@ -1,6 +1,6 @@
 import React, { createContext, useState, useContext, useEffect } from 'react';
 import { AppContext } from './AppContext';
-const API_URL = process.env.REACT_APP_API_URL;
+const API_URL = import.meta.env.VITE_API_URL;
 export const ChatContext = createContext();
 
 export const ChatProvider = ({ children }) => {
