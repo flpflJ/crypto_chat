@@ -1,6 +1,6 @@
 import React, { createContext, useState, useContext, useEffect } from 'react';
 import { AppContext } from './AppContext';
-
+const API_URL = process.env.REACT_APP_API_URL;
 export const ChatContext = createContext();
 
 export const ChatProvider = ({ children }) => {
@@ -17,7 +17,7 @@ export const ChatProvider = ({ children }) => {
   useEffect(() => {
     if (!user?.username) return;
 
-    const ws = new WebSocket(`ws://localhost:8000/ws/${user.username}`);
+    const ws = new WebSocket(`ws://${API_URL}/ws/${user.username}`);
     setSocket(ws);
 
     ws.onmessage = async (event) => {
@@ -93,7 +93,7 @@ export const ChatProvider = ({ children }) => {
     if (!withUser) return;
 
     try {
-      const res = await fetch(`http://localhost:8000/api/messages/${withUser}`, {
+      const res = await fetch(`http://${API_URL}/api/messages/${withUser}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
 
@@ -182,7 +182,7 @@ export const ChatProvider = ({ children }) => {
     const key = [user.username, to].sort().join('-');
 
     try {
-      const res = await fetch("http://localhost:8000/api/public_keys", {
+      const res = await fetch("http://${API_URL}/api/public_keys", {
         headers: { Authorization: `Bearer ${token}` }
       });
       const pubkeys = await res.json();
@@ -241,7 +241,7 @@ export const ChatProvider = ({ children }) => {
       socket?.send(JSON.stringify({ to, text: JSON.stringify(payload.for_recipient) }));
 
       // Сохранение сообщения на сервере (оба контейнера)
-      await fetch("http://localhost:8000/api/messages", {
+      await fetch("http://${API_URL}/api/messages", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

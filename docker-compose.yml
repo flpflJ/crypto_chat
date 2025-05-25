@@ -14,6 +14,8 @@ services:
       - app-network
     depends_on:
       - backend
+    environment:
+      - HOST_IP=${HOST_IP}
 
 networks:
   app-network:
