@@ -1,94 +1,192 @@
-import React, { createContext, useState, useContext, useEffect } from 'react';
+import React, { createContext, useState, useContext, useEffect, useCallback, useRef } from 'react';
 import { AppContext } from './AppContext';
+
 export const ChatContext = createContext();
 
 export const ChatProvider = ({ children }) => {
   const { user, users } = useContext(AppContext);
-
   const [conversations, setConversations] = useState({});
   const [activeUser, setActiveUserState] = useState(null);
   const [socket, setSocket] = useState(null);
+  const [publicKeys, setPublicKeys] = useState({});
+  const publicKeysRef = useRef(publicKeys);
+  const [retryCount, setRetryCount] = useState(0);
+  const isDemoMode = import.meta.env.VITE_DEMO_MODE === 'true';
 
-  // Вспомогательные функции для конвертации Base64 <-> Uint8Array
+  // Обновление ref при изменении publicKeys
+  useEffect(() => {
+    publicKeysRef.current = publicKeys;
+  }, [publicKeys]);
+
+  // Вспомогательные функции
   const base64ToUint8 = (b64) => Uint8Array.from(atob(b64), c => c.charCodeAt(0));
   const uint8ToBase64 = (arr) => btoa(String.fromCharCode(...arr));
   const API_URL = import.meta.env.VITE_API_URL;
+
+  // Загрузка публичных ключей
   useEffect(() => {
-    if (!user?.username) return;
-
-    const ws = new WebSocket(`ws://${API_URL}/ws/${user.username}`);
-    setSocket(ws);
-
-    ws.onmessage = async (event) => {
-      const data = JSON.parse(event.data);
-      const { from, text, timestamp } = data;
-      const key = [from, user.username].sort().join('-');
-
+    const fetchPublicKeys = async () => {
       try {
-        const privBase64 = localStorage.getItem("privkey");
-        if (!privBase64) throw new Error("No private key in localStorage");
-
-        // Импорт приватного RSA-ключа пользователя
-        const privRaw = base64ToUint8(privBase64);
-        const importedPriv = await crypto.subtle.importKey(
-          "pkcs8", privRaw.buffer,
-          { name: "RSA-OAEP", hash: "SHA-256" },
-          false, ["decrypt"]
-        );
-
-        const encrypted = JSON.parse(text);
-        if (!encrypted || !encrypted.aes_key || !encrypted.iv || !encrypted.cipher_text) {
-          throw new Error("Invalid encrypted payload from WebSocket");
-        }
-
-        // Расшифровка AES-ключа с помощью приватного RSA-ключа
-        const aesKeyRaw = await crypto.subtle.decrypt(
-          { name: "RSA-OAEP" },
-          importedPriv,
-          base64ToUint8(encrypted.aes_key)
-        );
-
-        // Импорт расшифрованного AES-ключа
-        const aesKey = await crypto.subtle.importKey(
-          "raw", aesKeyRaw,
-          { name: "AES-GCM" },
-          false, ["decrypt"]
-        );
-
-        // Расшифровка текста сообщения с помощью AES-ключа
-        const decryptedText = await crypto.subtle.decrypt(
-          { name: "AES-GCM", iv: base64ToUint8(encrypted.iv) },
-          aesKey,
-          base64ToUint8(encrypted.cipher_text)
-        );
-
-        const decoder = new TextDecoder();
-        const plain = decoder.decode(decryptedText);
-
-        const msg = { from, text: plain, timestamp: timestamp || Date.now() };
-
-        setConversations(prev => {
-          const existing = prev[key] || [];
-          const isDuplicate = existing.some(m => m.text === msg.text && m.timestamp === msg.timestamp && m.from === msg.from);
-          return isDuplicate ? prev : {
-            ...prev,
-            [key]: [...existing, msg]
-          };
+        const token = localStorage.getItem("token");
+        const res = await fetch(`http://${API_URL}/api/public_keys`, {
+          headers: { Authorization: `Bearer ${token}` }
         });
+        const keys = await res.json();
+        setPublicKeys(keys);
       } catch (e) {
-        console.error("Ошибка расшифровки сообщения (WebSocket):", e);
+        console.error("Ошибка загрузки публичных ключей:", e);
       }
     };
 
-    ws.onerror = (e) => console.error("WebSocket error:", e);
-    ws.onclose = () => console.log("WebSocket closed");
+    fetchPublicKeys();
+  }, [API_URL]);
 
-    return () => ws.close();
-  }, [user?.username]);
+  // Подключение WebSocket с автоматическим переподключением
+  useEffect(() => {
+    if (!user?.username) return;
+
+    let ws;
+    let reconnectTimer;
+
+    const connect = () => {
+      ws = new WebSocket(`ws://${API_URL}/ws/${user.username}`);
+      console.log("WebSocket: попытка подключения");
+
+      ws.onopen = () => {
+        console.log("WebSocket: подключение установлено");
+        setSocket(ws);
+        setRetryCount(0);
+      };
+
+      ws.onmessage = async (event) => {
+        const data = JSON.parse(event.data);
+        const { from, text, timestamp, fileInfo } = data;
+        const key = [from, user.username].sort().join('-');
+
+        try {
+          const privBase64 = localStorage.getItem("privkey");
+          if (!privBase64) throw new Error("No private key in localStorage");
+
+          // Импорт приватного ключа
+          const privRaw = base64ToUint8(privBase64);
+          const importedPriv = await crypto.subtle.importKey(
+            "pkcs8", privRaw.buffer,
+            { name: "RSA-OAEP", hash: "SHA-256" },
+            false, ["decrypt"]
+          );
+
+          const encrypted = JSON.parse(text);
+          if (!encrypted || !encrypted.aes_key || !encrypted.iv || !encrypted.cipher_text || !encrypted.signature) {
+            throw new Error("Invalid encrypted payload");
+          }
+
+          // Расшифровка AES-ключа
+          const aesKeyRaw = await crypto.subtle.decrypt(
+            { name: "RSA-OAEP" },
+            importedPriv,
+            base64ToUint8(encrypted.aes_key)
+          );
+
+          // Импорт AES-ключа
+          const aesKey = await crypto.subtle.importKey(
+            "raw", aesKeyRaw,
+            { name: "AES-GCM" },
+            false, ["decrypt"]
+          );
+
+          // Расшифровка данных
+          const decryptedData = await crypto.subtle.decrypt(
+            { name: "AES-GCM", iv: base64ToUint8(encrypted.iv) },
+            aesKey,
+            base64ToUint8(encrypted.cipher_text)
+          );
+
+          const decoder = new TextDecoder();
+          const decrypted = JSON.parse(decoder.decode(decryptedData));
+          
+          // Проверка подписи
+          const senderPubKey = publicKeysRef.current[from];
+          if (!senderPubKey) throw new Error("Public key not found for sender");
+          
+          const pubKeyRaw = base64ToUint8(senderPubKey);
+          const importedPubKey = await crypto.subtle.importKey(
+            "spki", pubKeyRaw.buffer,
+            { name: "RSA-PSS", hash: "SHA-256" },
+            false, ["verify"]
+          );
+
+          const isValid = await crypto.subtle.verify(
+            { name: "RSA-PSS", saltLength: 32 },
+            importedPubKey,
+            base64ToUint8(encrypted.signature),
+            new TextEncoder().encode(JSON.stringify({
+              content: decrypted.content,
+              type: decrypted.type,
+              ...(decrypted.fileName && { fileName: decrypted.fileName }),
+              ...(decrypted.fileType && { fileType: decrypted.fileType })
+            }))
+          );
+
+          const msg = {
+            from,
+            ...decrypted,
+            verified: isValid, // Добавлено поле верификации
+            timestamp: timestamp || Date.now(),
+            ...(fileInfo && { fileInfo })
+          };
+
+          setConversations(prev => {
+            const existing = prev[key] || [];
+            return {
+              ...prev,
+              [key]: [...existing, msg]
+            };
+          });
+        } catch (e) {
+          console.error("Ошибка обработки сообщения:", e);
+          
+          // Добавляем сообщение об ошибке
+          const errorMsg = {
+            from,
+            content: "Не удалось проверить подпись сообщения",
+            type: 'error',
+            verified: false,
+            timestamp: Date.now()
+          };
+          
+          setConversations(prev => ({
+            ...prev,
+            [key]: [...(prev[key] || []), errorMsg]
+          }));
+        }
+      };
+
+      ws.onerror = (e) => console.error("WebSocket error:", e);
+      
+      ws.onclose = (e) => {
+        console.log(`WebSocket closed: ${e.code} ${e.reason}`);
+        // Автоматическое переподключение с экспоненциальной задержкой
+        const delay = Math.min(3000, 1000 * Math.pow(2, retryCount));
+        console.log(`Повторное подключение через ${delay}ms`);
+        reconnectTimer = setTimeout(() => {
+          setRetryCount(prev => prev + 1);
+          connect();
+        }, delay);
+      };
+    };
+
+    connect();
+
+    return () => {
+      if (ws) ws.close();
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+    };
+  }, [user?.username, API_URL, retryCount]); // Убрана зависимость от publicKeys
 
   const token = localStorage.getItem("token");
 
-  const loadConversation = async (withUser) => {
+  // Загрузка истории переписки
+  const loadConversation = useCallback(async (withUser) => {
     if (!withUser) return;
 
     try {
@@ -96,14 +194,14 @@ export const ChatProvider = ({ children }) => {
         headers: { Authorization: `Bearer ${token}` }
       });
 
-      if (!res.ok) throw new Error("Ошибка загрузки истории сообщений");
+      if (!res.ok) throw new Error("Ошибка загрузки истории");
       const data = await res.json();
       const key = [user.username, withUser].sort().join('-');
 
       const privBase64 = localStorage.getItem("privkey");
-      if (!privBase64) throw new Error("Приватный ключ не найден в localStorage");
+      if (!privBase64) throw new Error("Private key not found");
 
-      // Импорт приватного RSA-ключа
+      // Импорт приватного ключа
       const privRaw = base64ToUint8(privBase64);
       const importedPriv = await crypto.subtle.importKey(
         "pkcs8", privRaw.buffer,
@@ -111,7 +209,6 @@ export const ChatProvider = ({ children }) => {
         false, ["decrypt"]
       );
 
-      const decoder = new TextDecoder();
       const decryptedMessages = [];
 
       for (const msg of data.messages || []) {
@@ -123,21 +220,15 @@ export const ChatProvider = ({ children }) => {
             continue;
           }
 
-          // Получаем нужный контейнер: for_sender или for_recipient
           const encrypted = msg.from_user === user.username
             ? container.for_sender
             : container.for_recipient;
 
-          if (
-            typeof encrypted !== "object" ||
-            !encrypted.aes_key ||
-            !encrypted.iv ||
-            !encrypted.cipher_text
-          ) {
+          if (!encrypted || !encrypted.aes_key || !encrypted.iv || !encrypted.cipher_text || !encrypted.signature) {
             continue;
           }
 
-          // Расшифровка AES-ключа и текста
+          // Расшифровка AES-ключа
           const aesKeyRaw = await crypto.subtle.decrypt(
             { name: "RSA-OAEP" },
             importedPriv,
@@ -150,46 +241,87 @@ export const ChatProvider = ({ children }) => {
             false, ["decrypt"]
           );
 
-          const decryptedText = await crypto.subtle.decrypt(
+          // Расшифровка данных
+          const decryptedData = await crypto.subtle.decrypt(
             { name: "AES-GCM", iv: base64ToUint8(encrypted.iv) },
             aesKey,
             base64ToUint8(encrypted.cipher_text)
           );
 
+          const decoder = new TextDecoder();
+          const decrypted = JSON.parse(decoder.decode(decryptedData));
+
+          // Проверка подписи
+          const senderPubKey = publicKeys[msg.from_user];
+          if (!senderPubKey) throw new Error("Public key not found");
+
+          const pubKeyRaw = base64ToUint8(senderPubKey);
+          const importedPubKey = await crypto.subtle.importKey(
+            "spki", pubKeyRaw.buffer,
+            { name: "RSA-PSS", hash: "SHA-256" },
+            false, ["verify"]
+          );
+
+          const isValid = await crypto.subtle.verify(
+            { name: "RSA-PSS", saltLength: 32 },
+            importedPubKey,
+            base64ToUint8(encrypted.signature),
+            new TextEncoder().encode(JSON.stringify({
+              content: decrypted.content,
+              type: decrypted.type,
+              ...(decrypted.fileName && { fileName: decrypted.fileName }),
+              ...(decrypted.fileType && { fileType: decrypted.fileType })
+            }))
+          );
+          
           decryptedMessages.push({
             from: msg.from_user,
-            text: decoder.decode(decryptedText),
+            ...decrypted,
+            verified: isValid, // Добавлено поле верификации
             timestamp: msg.timestamp || Date.now()
           });
         } catch (e) {
-          console.error("Ошибка расшифровки сообщения (history):", e.message);
+          console.error("Ошибка расшифровки сообщения:", e);
         }
       }
 
       setConversations(prev => ({ ...prev, [key]: decryptedMessages }));
     } catch (e) {
-      console.error("Ошибка загрузки истории переписки:", e);
+      console.error("Ошибка загрузки истории:", e);
     }
-  };
+  }, [API_URL, user, token, publicKeys]);
 
   const setActiveUser = (userObj) => {
     setActiveUserState(userObj);
     if (userObj) loadConversation(userObj.username);
   };
 
-  const sendMessage = async (to, message) => {
+  // Подпись контента
+  const signContent = async (content, privateKey) => {
+    const signature = await crypto.subtle.sign(
+      { name: "RSA-PSS", saltLength: 32 },
+      privateKey,
+      new TextEncoder().encode(content)
+    );
+    return uint8ToBase64(new Uint8Array(signature));
+  };
+
+  // Отправка сообщения (с опцией повреждения подписи для демо)
+  const sendMessage = async (to, content, type = 'text', fileName = null, fileType = null, corruptSignature = false) => {
     const key = [user.username, to].sort().join('-');
 
     try {
+      // Получение публичных ключей
       const res = await fetch(`http://${API_URL}/api/public_keys`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       const pubkeys = await res.json();
+      setPublicKeys(pubkeys);
 
       const pubkeyToRaw = base64ToUint8(pubkeys[to]);
       const pubkeySelfRaw = base64ToUint8(pubkeys[user.username]);
 
-      // Импорт публичных RSA-ключей получателя и отправителя
+      // Импорт публичных ключей
       const importedPubKeyTo = await crypto.subtle.importKey(
         "spki", pubkeyToRaw.buffer,
         { name: "RSA-OAEP", hash: "SHA-256" },
@@ -201,22 +333,57 @@ export const ChatProvider = ({ children }) => {
         false, ["encrypt"]
       );
 
-      // Генерация одноразового AES-ключа
+      // Импорт приватного ключа для подписи
+      const privBase64 = localStorage.getItem("privkey");
+      if (!privBase64) throw new Error("Private key not found");
+      const privRaw = base64ToUint8(privBase64);
+      const importedPriv = await crypto.subtle.importKey(
+        "pkcs8", privRaw.buffer,
+        { name: "RSA-PSS", hash: "SHA-256" },
+        false, ["sign"]
+      );
+
+      // Подготовка данных
+      const payload = {
+        content,
+        type,
+        ...(fileName && { fileName }),
+        ...(fileType && { fileType })
+      };
+
+      // Подпись данных
+      let signature = await signContent(JSON.stringify(payload), importedPriv);
+
+      // Демо-режим: повреждение подписи
+      if (isDemoMode && corruptSignature) {
+        console.log("ДЕМО: Повреждение подписи");
+        console.log('Оригинальная подпись:', signature);
+        const sigBytes = base64ToUint8(signature);
+        sigBytes[0] ^= 0xFF; // Инвертируем первый байт
+        signature = uint8ToBase64(sigBytes);
+        console.log('Поврежденная подпись:', signature);
+      }
+
+      // Шифрование данных
+      const encoder = new TextEncoder();
+      const dataToEncrypt = encoder.encode(JSON.stringify(payload));
+
+      // Генерация AES-ключа
       const aesKey = await crypto.subtle.generateKey(
         { name: "AES-GCM", length: 256 },
         true, ["encrypt", "decrypt"]
       );
       const aesRaw = await crypto.subtle.exportKey("raw", aesKey);
 
-      // Генерация IV и шифрование сообщения AES-GCM
+      // Шифрование данных
       const iv = crypto.getRandomValues(new Uint8Array(12));
       const cipherText = await crypto.subtle.encrypt(
         { name: "AES-GCM", iv },
         aesKey,
-        new TextEncoder().encode(message)
+        dataToEncrypt
       );
 
-      // Шифрование AES-ключа RSA-ключами получателя и отправителя
+      // Шифрование AES-ключа
       const encryptedAesKeyTo = await crypto.subtle.encrypt(
         { name: "RSA-OAEP" }, importedPubKeyTo, aesRaw
       );
@@ -224,22 +391,29 @@ export const ChatProvider = ({ children }) => {
         { name: "RSA-OAEP" }, importedPubKeySelf, aesRaw
       );
 
-      // Сборка контейнеров
+      // Формирование контейнеров
       const buildEncryptedPayload = (encryptedAesKey) => ({
         aes_key: uint8ToBase64(new Uint8Array(encryptedAesKey)),
         iv: uint8ToBase64(iv),
-        cipher_text: uint8ToBase64(new Uint8Array(cipherText))
+        cipher_text: uint8ToBase64(new Uint8Array(cipherText)),
+        signature
       });
 
-      const payload = {
+      const fullPayload = {
         for_sender: buildEncryptedPayload(encryptedAesKeySelf),
         for_recipient: buildEncryptedPayload(encryptedAesKeyTo)
       };
 
-      // Отправка получателю по WebSocket
-      socket?.send(JSON.stringify({ to, text: JSON.stringify(payload.for_recipient) }));
+      // Отправка через WebSocket
+      socket?.send(JSON.stringify({ 
+        to, 
+        text: JSON.stringify(fullPayload.for_recipient),
+        ...(type === 'file' && { 
+          fileInfo: { fileName, fileType, fileSize: content.length } 
+        })
+      }));
 
-      // Сохранение сообщения на сервере (оба контейнера)
+      // Сохранение на сервере
       await fetch(`http://${API_URL}/api/messages`, {
         method: "POST",
         headers: {
@@ -249,23 +423,79 @@ export const ChatProvider = ({ children }) => {
         body: JSON.stringify({
           from_user: user.username,
           to_user: to,
-          text: JSON.stringify(payload)
+          text: JSON.stringify(fullPayload)
         })
       });
 
-      const newMsg = { from: user.username, to, text: message, timestamp: Date.now() };
+      // Добавление в локальное состояние
+      const newMsg = {
+        from: user.username,
+        content,
+        type,
+        verified: true,
+        ...(fileName && { fileName }),
+        ...(fileType && { fileType }),
+        timestamp: Date.now()
+      };
 
-      setConversations(prev => {
-        const existing = prev[key] || [];
-        const isDuplicate = existing.some(m => m.text === newMsg.text && m.timestamp === newMsg.timestamp && m.from === newMsg.from);
-        return isDuplicate ? prev : {
-          ...prev,
-          [key]: [...existing, newMsg]
-        };
-      });
+      setConversations(prev => ({
+        ...prev,
+        [key]: [...(prev[key] || []), newMsg]
+      }));
     } catch (e) {
-      console.error("Ошибка sendMessage:", e);
+      console.error("Ошибка отправки:", e);
     }
+  };
+
+  // Отправка файла (с опцией повреждения подписи)
+  const sendFile = async (to, file, corruptSignature = false) => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      
+      reader.onload = async () => {
+        try {
+          const base64Data = reader.result.split(',')[1];
+          await sendMessage(
+            to, 
+            base64Data, 
+            'file', 
+            file.name, 
+            file.type,
+            corruptSignature // Передаем флаг повреждения подписи
+          );
+          resolve();
+        } catch (e) {
+          reject(e);
+        }
+      };
+      
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+  };
+
+  // Скачивание файла
+  const downloadFile = (message) => {
+    if (message.type !== 'file') return;
+    
+    const byteCharacters = atob(message.content);
+    const byteNumbers = new Array(byteCharacters.length);
+    
+    for (let i = 0; i < byteCharacters.length; i++) {
+      byteNumbers[i] = byteCharacters.charCodeAt(i);
+    }
+    
+    const byteArray = new Uint8Array(byteNumbers);
+    const blob = new Blob([byteArray], { type: message.fileType });
+    const url = URL.createObjectURL(blob);
+    
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = message.fileName || 'file';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
 
   return (
@@ -274,7 +504,10 @@ export const ChatProvider = ({ children }) => {
       conversations,
       activeUser,
       setActiveUser,
-      sendMessage
+      sendMessage,
+      sendFile,
+      downloadFile,
+      isDemoMode // Передаем флаг демо-режима
     }}>
       {children}
     </ChatContext.Provider>

@@ -3,12 +3,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel
 from jose import jwt, JWTError
-from typing import List, Dict
+from typing import List, Dict, Optional
 from datetime import datetime, timedelta
 import uvicorn
 import uuid
-
-
 
 # Simple in-memory storage
 USERS_DB = {}  # username -> {password, name, pubkey}
@@ -46,11 +44,13 @@ class MessageIn(BaseModel):
     from_user: str
     to_user: str
     text: str  # encrypted text (JSON-encoded hybrid)
+    file_info: Optional[dict] = None  # Добавляем поле для метаданных файла
 
 class MessageOut(BaseModel):
     from_user: str
     text: str
     timestamp: str
+    file_info: Optional[dict] = None  # Добавляем поле для метаданных файла
 
 # Auth utils
 def create_access_token(data: dict, expires_delta: timedelta = None):
@@ -147,13 +147,15 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
     active_connections[username] = websocket
     try:
         while True:
+            # Увеличиваем максимальный размер сообщения
             data = await websocket.receive_json()
             target = data["to"]
             timestamp = datetime.utcnow().isoformat()
             msg = {
                 "from": username,
                 "text": data["text"],
-                "timestamp": timestamp
+                "timestamp": timestamp,
+                "file_info": data.get("file_info")  # Сохраняем метаданные файла
             }
             if target in active_connections:
                 await active_connections[target].send_json(msg)
