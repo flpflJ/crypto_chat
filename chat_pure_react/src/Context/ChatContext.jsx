@@ -273,6 +273,13 @@ export const ChatProvider = ({ children }) => {
               ...(decrypted.fileType && { fileType: decrypted.fileType })
             }))
           );
+          if (isDemoMode) {
+            console.groupCollapsed(`[DEMO] Проверка подписи исторического сообщения от ${msg.from_user}`);
+            console.log('Тип контейнера:', msg.from_user === user.username ? 'for_sender' : 'for_recipient');
+            console.log('Подпись:', encrypted.signature);
+            console.log('Результат проверки:', isValid ? 'VALID' : 'INVALID');
+            console.groupEnd();
+          }
           
           decryptedMessages.push({
             from: msg.from_user,
@@ -400,8 +407,8 @@ export const ChatProvider = ({ children }) => {
       });
 
       const fullPayload = {
-        for_sender: buildEncryptedPayload(encryptedAesKeySelf),
-        for_recipient: buildEncryptedPayload(encryptedAesKeyTo)
+        for_sender: buildEncryptedPayload(encryptedAesKeySelf, signature),
+        for_recipient: buildEncryptedPayload(encryptedAesKeyTo, signature)
       };
 
       // Отправка через WebSocket
